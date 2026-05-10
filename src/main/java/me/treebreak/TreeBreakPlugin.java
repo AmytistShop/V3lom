@@ -19,59 +19,44 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-public final class TreeBreakPlugin extends JavaPlugin implements Listener {
+public class TreeBreakPlugin extends JavaPlugin implements Listener {
 
-    // Игрок -> задача ломания
-    private final Map<UUID, BukkitTask> breakingTasks = new HashMap<>();
+    private final Map<UUID, BukkitTask> tasks = new HashMap<>();
 
     @Override
     public void onEnable() {
-
         Bukkit.getPluginManager().registerEvents(this, this);
-
-        getLogger().info("TreeBreak enabled");
     }
 
     @Override
     public void onDisable() {
-
-        for (BukkitTask task : breakingTasks.values()) {
-            task.cancel();
-        }
-
-        breakingTasks.clear();
+        tasks.values().forEach(BukkitTask::cancel);
+        tasks.clear();
     }
 
     @EventHandler
-    public void onBlockDamage(BlockDamageEvent event) {
+    public void onBlockDamage(BlockDamageEvent e) {
 
-        Player player = event.getPlayer();
-        Block block = event.getBlock();
+        Player p = e.getPlayer();
+        Block b = e.getBlock();
 
-        // Только дерево
-        if (!isLog(block.getType())) {
-            return;
-        }
+        if (!isLog(b.getType())) return;
+        if (p.getGameMode() == GameMode.CREATIVE) return;
+        if (tasks.containsKey(p.getUniqueId())) return;
 
-        // Креатив не трогаем
-        if (player.getGameMode() == GameMode.CREATIVE) {
-            return;
-        }
+        // ❗ полностью убираем vanilla mining
+        e.setCancelled(true);
+        e.setInstaBreak(false);
 
-        // Уже ломает
-        if (breakingTasks.containsKey(player.getUniqueId())) {
-            return;
-        }
+        // сбрасываем клиентский прогресс (ВАЖНО для Bedrock)
+        p.sendBlockDamage(b.getLocation(), 0f);
 
-        // Отменяем обычное ломание
-        event.setCancelled(true);
-
-        startBreaking(player, block);
+        start(p, b);
     }
 
-    private void startBreaking(Player player, Block block) {
+    private void start(Player p, Block b) {
 
-        UUID uuid = player.getUniqueId();
+        UUID id = p.getUniqueId();
 
         BukkitTask task = new BukkitRunnable() {
 
@@ -80,103 +65,68 @@ public final class TreeBreakPlugin extends JavaPlugin implements Listener {
             @Override
             public void run() {
 
-                // Игрок вышел
-                if (!player.isOnline()) {
+                if (!p.isOnline()) {
                     stop();
                     return;
                 }
 
-                // Блок уже сломан
-                if (block.getType() == Material.AIR) {
+                if (b.getType() == Material.AIR) {
                     stop();
                     return;
                 }
 
-                // Далеко отошел
-                if (player.getLocation().distance(block.getLocation()) > 6) {
+                if (p.getLocation().distanceSquared(b.getLocation()) > 36) {
                     stop();
                     return;
                 }
 
-                // Перестал смотреть
-                Block target = player.getTargetBlockExact(6);
+                // ❗ фикс прогресса (НИКОГДА не 1.0)
+                float progress = Math.min(stage / 12f, 0.98f);
 
-                if (target == null || !target.getLocation().equals(block.getLocation())) {
-                    stop();
-                    return;
-                }
-
-                // Анимация ломания
-                player.sendBlockDamage(block.getLocation(), stage / 10f);
+                p.sendBlockDamage(b.getLocation(), progress);
 
                 stage++;
 
-                // Закончили ломать
-                if (stage >= 10) {
+                // финальный слом ТОЛЬКО тут
+                if (stage >= 12) {
 
-                    ItemStack tool = player.getInventory().getItemInMainHand();
+                    ItemStack tool = p.getInventory().getItemInMainHand();
 
-                    block.breakNaturally(tool);
+                    b.breakNaturally(tool);
 
-                    player.sendBlockDamage(block.getLocation(), 0f);
+                    p.sendBlockDamage(b.getLocation(), 0f);
 
                     stop();
                 }
             }
 
-            private void stop() {
-
-                player.sendBlockDamage(block.getLocation(), 0f);
-
-                BukkitTask current = breakingTasks.remove(uuid);
-
-                if (current != null) {
-                    current.cancel();
-                }
+            void stop() {
+                BukkitTask t = tasks.remove(id);
+                if (t != null) t.cancel();
+                cancel();
             }
 
-        // СКОРОСТЬ:
-        // 2L = быстро
-        // 4L = x2 медленнее
-        // 6L = x3 медленнее
-        // 8L = очень медленно
+        }.runTaskTimer(this, 0L, 4L); // скорость ломания
 
-        }.runTaskTimer(this, 0L, 4L);
-
-        breakingTasks.put(uuid, task);
+        tasks.put(id, task);
     }
 
     @EventHandler
-    public void onAbort(BlockDamageAbortEvent event) {
-
-        UUID uuid = event.getPlayer().getUniqueId();
-
-        BukkitTask task = breakingTasks.remove(uuid);
-
-        if (task != null) {
-            task.cancel();
-        }
+    public void onAbort(BlockDamageAbortEvent e) {
+        BukkitTask t = tasks.remove(e.getPlayer().getUniqueId());
+        if (t != null) t.cancel();
     }
 
     @EventHandler
-    public void onQuit(PlayerQuitEvent event) {
-
-        UUID uuid = event.getPlayer().getUniqueId();
-
-        BukkitTask task = breakingTasks.remove(uuid);
-
-        if (task != null) {
-            task.cancel();
-        }
+    public void onQuit(PlayerQuitEvent e) {
+        BukkitTask t = tasks.remove(e.getPlayer().getUniqueId());
+        if (t != null) t.cancel();
     }
 
-    private boolean isLog(Material material) {
-
-        String name = material.name();
-
-        return name.endsWith("_LOG")
-                || name.endsWith("_WOOD")
-                || name.equals("CRIMSON_STEM")
-                || name.equals("WARPED_STEM");
+    private boolean isLog(Material m) {
+        return m.name().endsWith("_LOG")
+                || m.name().endsWith("_WOOD")
+                || m.name().equals("CRIMSON_STEM")
+                || m.name().equals("WARPED_STEM");
     }
-          }
+}
