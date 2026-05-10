@@ -1,0 +1,5 @@
+name: TreeBreakPlugin
+version: 1.0
+main: me.treebreak.TreeBreakPlugin
+api-version: '1.21'
+author: You
