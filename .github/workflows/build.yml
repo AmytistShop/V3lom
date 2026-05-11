@@ -1,9 +1,13 @@
-name: Build Plugin
+name: Build LogSlow Plugin
 
 on:
   push:
     branches:
       - main
+      - master
+
+  pull_request:
+
   workflow_dispatch:
 
 jobs:
@@ -14,17 +18,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 21
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 17
+          cache: maven
 
       - name: Build with Maven
         run: mvn clean package
 
-      - name: Upload jar
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TreeBreakPlugin
+          name: LogSlow
           path: target/*.jar
